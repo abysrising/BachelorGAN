@@ -17,6 +17,7 @@ def train_fn(disc, gen, loader, opt_disc, opt_gen, l1_loss, bce, g_scaler, d_sca
     for idx, (x, y) in enumerate(loop):
         x = x.to(config.DEVICE)
         y = y.to(config.DEVICE)
+        
 
         # Train Discriminator
         with torch.cuda.amp.autocast():
@@ -44,10 +45,20 @@ def train_fn(disc, gen, loader, opt_disc, opt_gen, l1_loss, bce, g_scaler, d_sca
         g_scaler.step(opt_gen)
         g_scaler.update()
 
+        if idx % 10 == 0:
+            loop.set_postfix(
+                D_real=torch.sigmoid(D_real).mean().item(),
+                D_fake=torch.sigmoid(D_fake).mean().item(),
+            )
 
-def main():
+
+
+def main(iteration):
+
     disc = Discriminator(in_channels=3).to(config.DEVICE)
     gen = Generator(in_channels=3).to(config.DEVICE)
+
+    
     opt_disc = optim.Adam(disc.parameters(), lr=config.LEARNING_RATE, betas=(0.5, 0.999),)
     opt_gen = optim.Adam(gen.parameters(), lr=config.LEARNING_RATE, betas=(0.5, 0.999),)
     BCE = nn.BCEWithLogitsLoss()
@@ -76,6 +87,7 @@ def main():
     val_loader = DataLoader(val_dataset, batch_size=1, shuffle=False)
 
     for epoch in range(config.NUM_EPOCHS):
+        print ("Epoch: ", epoch)
         train_fn(
             disc, gen, train_loader, opt_disc, opt_gen, L1_LOSS, BCE, g_scaler, d_scaler
         )
@@ -84,8 +96,15 @@ def main():
             save_checkpoint(gen, opt_gen, filename=config.CHECKPOINT_GEN)
             save_checkpoint(disc, opt_disc, filename=config.CHECKPOINT_DISC)
 
-        save_some_examples(gen, val_loader, epoch, folder="evaluation")
+        save_some_examples(gen, val_loader, epoch, folder="evaluation" + iteration)
 
 
 if __name__ == "__main__":
-    main()
+    starting_lr = 2e-4
+    config.LEARNING_RATE = starting_lr
+    
+    for i in range(20):
+        print("Learning rate: ", config.LEARNING_RATE)
+        main(str(config.LEARNING_RATE))
+        config.LEARNING_RATE = config.LEARNING_RATE + i/10
+    

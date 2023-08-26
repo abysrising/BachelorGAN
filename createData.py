@@ -1,4 +1,3 @@
-import concurrent.futures
 import cv2
 from datasets import load_dataset
 from PIL import Image
@@ -7,102 +6,152 @@ import json
 import numpy as np
 from matplotlib import pyplot as plt
 import cropLayer
+import time as t
+import multiprocessing
+from multiprocessing import Process
+import shutil
 from sklearn.model_selection import train_test_split
-
+import random
 
 # Change size of image to "target_size"
 def resize_image(input_image, target_size):
     resized_image = input_image.resize((target_size, target_size))
     return resized_image
 
+def count_files(folder_path):
+    file_count = sum([len(files) for _, _, files in os.walk(folder_path) if files])
+    return file_count
+
+
 class generateData():
     def __init__(self):
-        self.batch_size = 20
         self.folder_path = "data_train"
+        self.x = imageToSketch()
+        self.capable_cpu = 0
+        self.sleep_time = 0
         dataset = load_dataset("huggan/wikiart", split="train", streaming=True)
+        print("===========================================================")
         self.adjust_data(self.folder_path, dataset)
-    
 
-    def count_files(self, folder_path):
-        file_count = sum([len(files) for _, _, files in os.walk(folder_path) if files])
-        return file_count
 
-    def process_batch(self, batch, x, train_data_folder, batchid):
-        index = -1
-        for example in batch:
-            index += 1
-            if example["genre"] in [4, 1]:
-            
-                image = example["image"]
 
-                resized_sketch = resize_image((x.image_to_sketch(image)), 256)
-                resized_sketch_array = np.array(resized_sketch)
+    def process_example(self, batch, train_data_folder):
+        print(multiprocessing.current_process())
+        t.sleep(self.sleep_time*2)
+        self.sleep_time -= 2
         
 
+        for index, example in batch:
+        
+            if example["genre"] in [4, 1]:
+                image = example["image"]
+
+                resized_sketch = resize_image((self.x.image_to_sketch(image)), 256)
                 resized_image = resize_image(image, 256)
-                resized_image_array = np.array(resized_image)
+            
 
-                image_data = {
-                    "image": resized_image_array.tolist(),
-                    "sketch": resized_sketch_array.tolist(),
-                    "artist": example["artist"],
-                    "style": example["style"],
-                    "genre": example["genre"],
-                }
+                sketch_json_filename = f"{index}_artist{example['artist']}_style{example['style']}_genre{example['genre']}.json"
+                image_json_filename = f"{index}_artist{example['artist']}_style{example['style']}_genre{example['genre']}.json"
 
-                json_filename = f"{index + batchid*self.batch_size}_artist{example['artist']}_style{example['style']}_genre{example['genre']}.json"
-                json_filepath = os.path.join(train_data_folder, json_filename)
-
-                with open(json_filepath, "w") as json_file:
-                    json.dump(image_data, json_file)
-
-                print(json_filepath)
-                print("===========================================================")
-                file_count = self.count_files(self.folder_path)
-                print(f"Anzahl der Dateien im Ordner {self.folder_path}: {file_count}")
-                print("===========================================================")
+                output_path_sketch = "data/artworks/train/sketch/" + sketch_json_filename
+                output_path_image = "data/artworks/train/image/" + image_json_filename
+                resized_sketch.save(output_path_sketch)
+                resized_image.save(output_path_image)
+             
 
 
     def adjust_data(self, output_folder, dataset):
-        train_data_folder = output_folder
+        print("start adjusting data")
 
-        if not os.path.exists(train_data_folder):
-            os.makedirs(train_data_folder)
+        if not os.path.exists(output_folder):
+            os.makedirs(output_folder)
 
-        x = imageToSketch()
-       
-        batch = []
-        futures = []
-        batchid = 0
+        batch_size = 25
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
-            for example in dataset:
-                batch.append(example)
-                if len(batch) >= self.batch_size:
-                    futures.append(executor.submit(self.process_batch, batch, x, train_data_folder, batchid))
-                    batch = []
-                    print(f"Tasks: {len(futures)}")
-                    print("===========================================================")
-                    batchid += 1
+        start_time = t.perf_counter()
 
-            # Überprüfen, ob es noch Aufgaben im letzten Batch gibt
-            if len(batch) > 0:
-                futures.append(executor.submit(self.process_batch, batch, x, train_data_folder, batchid))
+        if multiprocessing.cpu_count() > 6:
+            self.capable_cpu = max(multiprocessing.cpu_count()-2, 6)-8
+            print("capable cpu count: ", self.capable_cpu)
+        else:
+            self.capable_cpu = 2
+            print("capable cpu count: ", self.capable_cpu)
 
-            # Warten, bis alle Future-Objekte abgeschlossen sind
-            concurrent.futures.wait(futures)
+        print("start processing")
 
-  
+        # Hier die zuletzt verarbeiteten Beispiele aus einer gespeicherten Datei laden
+        saved_progress = self.load_progress(output_folder)
+        if saved_progress:
+            batch_id, examples_progressed = saved_progress
+        else:
+            batch_id = 0
+            examples_progressed = 0
+
+        self.sleep_time = self.capable_cpu
+        current_batch = []
+        for index, example in enumerate(dataset):
+            if examples_progressed <= index < examples_progressed + self.capable_cpu * batch_size:
+                # Schon verarbeitete Beispiele überspringen
+                continue
+
+            if len(current_batch) >= self.capable_cpu * batch_size:
+                process_list = []
+                start_time = t.perf_counter()
+                for i in range(self.capable_cpu):
+                    a = Process(target=self.process_example, args=(current_batch[i*batch_size:(i+1)*batch_size], output_folder))
+                    process_list.append(a)
+
+                for process in process_list:
+                    process.start()
+
+                for process in process_list:
+                    process.join()
+
+                end_time = t.perf_counter()
+                print("batch#", batch_id, "finished in:", end_time - start_time, "seconds")
+                current_batch = []
+                batch_id += 1
+
+                examples_progressed = batch_id * self.capable_cpu * batch_size
+
+                # Speichern des Fortschritts
+                self.save_progress(output_folder, batch_id, examples_progressed)
+
+            current_batch.append((index, example))
+
+    def load_progress(self, output_folder):
+        progress_file = os.path.join(output_folder, "progress.txt")
+        if os.path.exists(progress_file):
+            with open(progress_file, "r") as f:
+                lines = f.readlines()
+                if len(lines) == 2:
+                    batch_id = int(lines[0])
+                    examples_progressed = int(lines[1])
+                    return batch_id, examples_progressed
+        return None
+
+    def save_progress(self, output_folder, batch_id, examples_progressed):
+        progress_file = os.path.join(output_folder, "progress.txt")
+        with open(progress_file, "w") as f:
+            f.write(str(batch_id) + "\n")
+            f.write(str(examples_progressed) + "\n")
+
+
+
+
+        #for index, example in enumerate(sub_dataset):
+        #    self.process_example(example, output_folder, index)
+
+
+    
 
 
 class imageToSketch():
 
-    def __init__(self):
-        self.protoPath = "HED/deploy.prototxt" # path to the prototxt file
-        self.modelPath = "HED/hed_pretrained_bsds.caffemodel" # path to the pre-trained model
-        # Load model and create blob
+    def initialize_net(self):
+        self.protoPath = "HED/deploy.prototxt"
+        self.modelPath = "HED/hed_pretrained_bsds.caffemodel"
         self.net = cv2.dnn.readNetFromCaffe(self.protoPath, self.modelPath)
-        # register our crop layer with the model
         cv2.dnn_registerLayer("Crop", cropLayer.CropLayer)
 
     # Shows an image
@@ -127,21 +176,19 @@ class imageToSketch():
         plt.imshow(pil_image)
         plt.show()
 
-    def canny_edge_detection(self, image):
+    def canny_edge_detection(self, image_path):
+        # Load the image using PIL
+        image = Image.open(image_path)
 
-        image_array = self.convert_to_image(image)
+        # Convert PIL.Image.Image to a Numpy Array
+        image_array = np.array(image)
 
-        # Konvertiere PIL.Image.Image in ein Numpy-Array
-        image_array = image_array[1]
-        
-        # Canny
-        canny_edge = cv2.Canny(image_array, 50, 150)
+        # Canny Edge Detection
+        canny_edge = cv2.Canny(image_array, 300, 500)
 
         # Autocanny
-        sigma = 0.3
+        sigma = 0.2
         median = np.median(image_array)
-
-        # Berechne die Schwellenwerte für die automatische Canny-Kantenerkennung
         lower = int(max(0, (1.0 - sigma) * median))
         upper = int(min(255, (1.0 + sigma) * median))
         auto_canny = cv2.Canny(image_array, lower, upper)
@@ -310,6 +357,8 @@ class imageToSketch():
 
 
     def image_to_sketch(self, image):
+        if not hasattr(self, "net"):
+            self.initialize_net()
 
         hed_thickness = 0.7
         remove_ojects_size = 100 
@@ -335,46 +384,68 @@ class imageToSketch():
 
 
 
+"""
+def convert_json_to_png(output_folder, input_folder, start_index=4452):
+    output_directory = output_folder
+    input_directory = input_folder
+
+    for idx, file in enumerate(sorted(os.listdir(input_directory))):
+        if idx < start_index:
+            continue
+
+        f = os.path.join(input_directory, file)
+        with open(f, "r") as json_file:
+            data = json.load(json_file)
+
+        array = np.array(data["image"])
+        array_sketch = np.array(data["sketch"])
+
+        array = array.astype(np.uint8)
+        array_sketch = array_sketch.astype(np.uint8)
+
+        pil_sketch = Image.fromarray(array_sketch)
+        pil_image = Image.fromarray(array)
+
+        output_path_sketch = os.path.join(output_directory, "sketch", f"{file}.sketch.png")
+        output_path = os.path.join(output_directory, "image", f"{file}.png")
+        os.makedirs(os.path.dirname(output_path_sketch), exist_ok=True)
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+
+        pil_image.save(output_path)
+        pil_sketch.save(output_path_sketch)
+
+        print(f"Image saved: {output_path}")
+        print(f"Sketch saved: {output_path_sketch}")
+"""
+
+
+
 if __name__ == "__main__":
 
-    y = generateData()
-    #x = imageToSketch()
+    #y = generateData()
+    x = imageToSketch()
     
+    #x.canny_edge_detection("Images/exampleoriginalsize.jpg")
+
+    #convert_json_to_png("train", "data/artworks/train")
+  
+   
+
+                
     """
-    i = 0
-    directory = "data_train"
-    for element in os.listdir(directory):
-        if i >= 10:
-            break  
+    directory = "data/artworks/train"
+    for i in range(5):
+        
+        element = random.choice(os.listdir(directory))
         f = os.path.join(directory, element)
+
+        with open(f, "r") as json_file:
+            data = json.load(json_file)
+
+        array = np.array(data["sketch"])
+        array = array.astype(np.uint8)
+
         x.show_image(f, sketch=False)
         x.show_image(f, sketch=True)
-        i += 1
     """
-
-
-    """"
-    # Pfade zu den Ordnern
-    source_folder = "data_train"
-    train_folder = "data/artworks/train"
-    val_folder = "data/artworks/val"
-
-    # Liste der Dateinamen in deinem Quellordner
-    file_names = os.listdir(source_folder)
-
-    # Aufteilung in Trainings- und Validierungsdaten
-    train_file_names, val_file_names = train_test_split(file_names, test_size=0.3, random_state=42)
-
-    # Verschieben der Trainingsdaten
-    for file_name in train_file_names:
-        src_path = os.path.join(source_folder, file_name)
-        dst_path = os.path.join(train_folder, file_name)
-        shutil.move(src_path, dst_path)
-
-    # Verschieben der Validierungsdaten
-    for file_name in val_file_names:
-        src_path = os.path.join(source_folder, file_name)
-        dst_path = os.path.join(val_folder, file_name)
-        shutil.move(src_path, dst_path)
-    """
-  
+    

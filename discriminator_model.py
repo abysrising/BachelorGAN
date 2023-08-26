@@ -5,8 +5,8 @@ class CNNBlock(nn.Module):
     def __init__(self, in_channels, out_channels, stride=2):
         super().__init__()
         self.conv = nn.Sequential(
-            nn.Conv2d(in_channels, out_channels, 4, stride, bias=False, padding_mode="reflect"),
-            nn.BatchNorm2d(out_channels),
+            nn.Conv2d(in_channels, out_channels, 4, stride, bias=False, padding_mode="reflect", padding = 1),
+            nn.InstanceNorm2d(out_channels, affine=True),
             nn.LeakyReLU(0.2)
         )
     def forward(self, x):
@@ -37,7 +37,7 @@ class Discriminator(nn.Module):
 
     def forward(self, x, y):
         x = torch.cat([x, y], dim=1)
-        print(x.shape)
+        #print(x.shape)
         x = self.initial(x)
         return self.model(x)
 
@@ -47,7 +47,6 @@ def test():
     y = torch.randn((1, 3, 256, 256))
     model = Discriminator()
     preds = model(x, y)
-    print(preds[0][0])
     print(preds.shape)
 
 
