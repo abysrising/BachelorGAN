@@ -23,9 +23,11 @@ def train_fn(disc, gen, loader, opt_disc, opt_gen, l1_loss, bce, g_scaler, d_sca
         with torch.cuda.amp.autocast():
             y_fake = gen(x)
             D_real = disc(x, y)
-            D_real_loss = bce(D_real, torch.ones_like(D_real))
             D_fake = disc(x, y_fake.detach())
+
+            D_real_loss = bce(D_real, torch.ones_like(D_real))
             D_fake_loss = bce(D_fake, torch.zeros_like(D_fake))
+
             D_loss = (D_real_loss + D_fake_loss) / 2
  
         disc.zero_grad()
@@ -46,9 +48,14 @@ def train_fn(disc, gen, loader, opt_disc, opt_gen, l1_loss, bce, g_scaler, d_sca
         g_scaler.update()
 
         if idx % 10 == 0:
+        
             loop.set_postfix(
-                D_real=torch.sigmoid(D_real).mean().item(),
-                D_fake=torch.sigmoid(D_fake).mean().item(),
+                #D_real=torch.sigmoid(D_real).mean().item(),
+                #D_fake=torch.sigmoid(D_fake).mean().item(),
+                D_real_loss= D_real_loss.item(),
+                D_fake_loss= D_fake_loss.item(),
+                D_loss=D_loss.item(),
+                G_loss=G_loss.item(),
             )
 
 
@@ -100,9 +107,7 @@ def main(iteration):
 
 
 if __name__ == "__main__":
-    starting_lr = 2e-4
-    config.LEARNING_RATE = starting_lr
-    
+
     for i in range(20):
         print("Learning rate: ", config.LEARNING_RATE)
         main(str(config.LEARNING_RATE))
