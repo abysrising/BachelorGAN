@@ -14,7 +14,7 @@ LAMBDA_IDENTITY = 0.0
 LAMBDA_CYCLE = 10
 NUM_EPOCHS = 10
 LOAD_MODEL = False
-SAVE_MODEL = False
+SAVE_MODEL = True
 
 CHECKPOINT_GEN_SKETCH = "Models/outputs/cycleGAN/trained_models/gens_" + str(LEARNING_RATE) + "_" + str(NUM_EPOCHS) + ".pth.tar"
 CHECKPOINT_GEN_REAL = "Models/outputs/cycleGAN/trained_models/genr_" + str(LEARNING_RATE) + "_" + str(NUM_EPOCHS) + ".pth.tar"

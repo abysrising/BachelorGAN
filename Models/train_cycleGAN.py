@@ -81,7 +81,7 @@ def train_fn(disc_S, disc_R, gen_R, gen_S, train_loader, val_loader, opt_disc, o
         g_scaler.update()
 
        
-        if idx % 200 == 0:
+        if idx % 400 == 0:
            save_some_examples(gen_R, val_loader, epoch = idx/100, folder = config.OUTPUT_DIR_EVAL)
         
         if idx % 10 == 0:

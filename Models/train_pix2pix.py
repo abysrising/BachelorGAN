@@ -79,6 +79,7 @@ def train_fn(disc, gen, loader, opt_disc, opt_gen, l1_loss, bce, g_scaler, d_sca
 
 def main(learn_rate, train=True):
 
+    print("Learning rate: ", learn_rate, "Epochs: ", config.NUM_EPOCHS)
 
     random_seed = random.randint(1, 1000)
     torch.manual_seed(random_seed)
@@ -140,11 +141,12 @@ def main(learn_rate, train=True):
                 disc, gen, train_loader, opt_disc, opt_gen, L1_LOSS, BCE, g_scaler, d_scaler
             )
             
+    
             if config.SAVE_MODEL and epoch % 5 == 0:
                 save_checkpoint(gen, opt_gen, filename=config.CHECKPOINT_GEN)
                 save_checkpoint(disc, opt_disc, filename=config.CHECKPOINT_DISC)
 
-            if epoch % 5 == 0:
+            if epoch % 10 == 0:
                 save_some_examples(gen, val_loader, epoch, full_folder_path)
                 
         show_loss_graph(config.G_LOSS_LIST, name = "generator_loss", lr = config.LEARNING_RATE, epochs = config.NUM_EPOCHS)
@@ -158,7 +160,5 @@ def main(learn_rate, train=True):
         
 
 if __name__ == "__main__":
-
-    print("Learning rate: ", config.LEARNING_RATE, "Epochs: ", config.NUM_EPOCHS)
     main(str(config.LEARNING_RATE), train=True)
         
