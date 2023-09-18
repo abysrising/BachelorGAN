@@ -11,13 +11,12 @@ IMAGE_SIZE = 256
 CHANNELS_IMG = 3
 L1_LAMBDA = 100
 LAMBDA = 1
-NUM_EPOCHS = 100
+NUM_EPOCHS = 150
 LOAD_MODEL = False
 SAVE_MODEL = True
 CHECKPOINT_DISC = "Models/outputs/pix2pix/trained_models/disc_" + str(LEARNING_RATE) + "_" + str(NUM_EPOCHS) + ".pth.tar"
 CHECKPOINT_GEN = "Models/outputs/pix2pix/trained_models/gen_" + str(LEARNING_RATE) + "_" + str(NUM_EPOCHS) + ".pth.tar"
 OUTPUT_DIR = "Models/outputs/pix2pix"
-
 G_LOSS_LIST = []
 D_LOSS_LIST = []
 RANDOM_INDEX = 0

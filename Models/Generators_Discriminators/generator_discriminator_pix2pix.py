@@ -115,6 +115,7 @@ class Discriminator(nn.Module):
             y = torch.zeros_like(x)
             x = torch.cat([x, y], dim=1)
         x = self.initial(x)
+        
         return self.model(x)
 
 

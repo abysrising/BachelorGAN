@@ -7,7 +7,11 @@ import albumentations as A
 from albumentations.pytorch import ToTensorV2
 
 both_transform = A.Compose(
-    [A.Resize(width=256, height=256),], additional_targets={"image0": "image"},
+    [A.Resize(width=256, height=256),
+    A.HorizontalFlip(p=0.5),
+    ], 
+    additional_targets={"image0": "image"},
+     
 )
 
 transform_only_input = A.Compose(

@@ -77,7 +77,7 @@ def train_fn(disc, gen, loader, opt_disc, opt_gen, l1_loss, bce, g_scaler, d_sca
             )
 
 
-def main(learn_rate, train=True):
+def main(learn_rate, gen_checkpoint = config.CHECKPOINT_GEN, disc_checkpoint = config.CHECKPOINT_DISC, train=True,):
 
     print("Learning rate: ", learn_rate, "Epochs: ", config.NUM_EPOCHS)
 
@@ -88,8 +88,8 @@ def main(learn_rate, train=True):
     gen = Generator(in_channels=3).to(config.DEVICE)
 
     
-    opt_disc = optim.Adam(disc.parameters(), lr=config.LEARNING_RATE, betas=(0.5, 0.999),)
-    opt_gen = optim.Adam(gen.parameters(), lr=config.LEARNING_RATE, betas=(0.5, 0.999),)
+    opt_disc = optim.Adam(disc.parameters(), lr=float(learn_rate), betas=(0.5, 0.999),)
+    opt_gen = optim.Adam(gen.parameters(), lr=float(learn_rate), betas=(0.5, 0.999),)
     BCE = nn.BCEWithLogitsLoss()
     L1_LOSS = nn.L1Loss()
 
@@ -143,14 +143,14 @@ def main(learn_rate, train=True):
             
     
             if config.SAVE_MODEL and epoch % 5 == 0:
-                save_checkpoint(gen, opt_gen, filename=config.CHECKPOINT_GEN)
-                save_checkpoint(disc, opt_disc, filename=config.CHECKPOINT_DISC)
+                save_checkpoint(gen, opt_gen, filename=gen_checkpoint)
+                save_checkpoint(disc, opt_disc, filename=disc_checkpoint)
 
             if epoch % 10 == 0:
                 save_some_examples(gen, val_loader, epoch, full_folder_path)
                 
-        show_loss_graph(config.G_LOSS_LIST, name = "generator_loss", lr = config.LEARNING_RATE, epochs = config.NUM_EPOCHS)
-
+        show_loss_graph(config.G_LOSS_LIST, name = "generator_loss", lr = learn_rate, epochs = config.NUM_EPOCHS)
+        config.G_LOSS_LIST = []
 
     else:
         for i in range(3):

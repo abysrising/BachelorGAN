@@ -27,8 +27,8 @@ def save_some_examples(gen, val_loader, epoch, folder):
         y = y * 0.5 + 0.5
 
         save_image(y_fake, folder + f"/y_gen_{epoch}.png")
-        save_image(x , folder + f"/input_{epoch}.png") 
         if epoch == 0:
+            save_image(x , folder + f"/input_{epoch}.png") 
             save_image(y, folder + f"/label_{epoch}.png") 
     gen.train()
 
@@ -89,7 +89,7 @@ def show_loss_graph(loss_list, name = "loss_graph", lr = 0.0002, epochs = 200):
     save_path = os.path.join(full_folder_patch, save_name)
     plt.savefig(save_path)
     
-    plt.show()
+    #plt.show()
 
 
 def show_generated_img(gen, val_loader):

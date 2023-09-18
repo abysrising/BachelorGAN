@@ -7,44 +7,24 @@ from Generators_Discriminators.generator_discriminator_cycleGAN import Generator
 from Generators_Discriminators.generator_discriminator_cycleGAN import Discriminator
 from torch.utils.data import DataLoader
 from tqdm import tqdm
-from dataset import ArtDataset
+from dataset_cycleGAN import ArtDataset
 import random
 import os
 
 
 
-def train_fn(disc_S, disc_R, gen_R, gen_S, train_loader, val_loader, opt_disc, opt_gen, l1, mse, d_scaler, g_scaler):
+def train_fn(disc_S, disc_R, gen_R, gen_S, train_loader, val_loader, opt_disc, opt_gen, l1, mse, d_scaler, g_scaler, epoch):
     loop = tqdm(train_loader, leave=True)
     for idx, (sketch, real) in enumerate(loop):
         real = real.to(config.DEVICE)
         sketch = sketch.to(config.DEVICE)
-    
-        # Train Discriminators H and Z
-        with torch.cuda.amp.autocast():
-            fake_sketch = gen_S(real)
-            D_S_real = disc_S(sketch)
-            D_S_fake = disc_S(fake_sketch.detach())
-            D_S_real_loss = mse(D_S_real, torch.ones_like(D_S_real))
-            D_S_fake_loss = mse(D_S_fake, torch.zeros_like(D_S_fake))
-            D_S_loss = D_S_real_loss + D_S_fake_loss
-
-            fake_real = gen_R(sketch)
-            D_R_real = disc_R(real)
-            D_R_fake = disc_R(fake_real.detach())
-            D_R_real_loss = mse(D_R_real, torch.ones_like(D_R_real))
-            D_R_fake_loss = mse(D_R_fake, torch.zeros_like(D_R_fake))
-            D_R_loss = D_R_real_loss + D_R_fake_loss
-
-            # put it togethor
-            D_loss = (D_S_loss + D_R_loss) / 2
-
-        opt_disc.zero_grad()
-        d_scaler.scale(D_loss).backward()
-        d_scaler.step(opt_disc)
-        d_scaler.update()
 
         # Train Generators S and R
         with torch.cuda.amp.autocast():
+            fake_sketch = gen_S(real)
+            fake_real = gen_R(sketch)
+
+
             # adversarial loss for both generators
             D_S_fake = disc_S(fake_sketch)
             D_R_fake = disc_R(fake_real)
@@ -57,22 +37,20 @@ def train_fn(disc_S, disc_R, gen_R, gen_S, train_loader, val_loader, opt_disc, o
             cycle_real_loss = l1(real, cycle_real)
             cycle_sketch_loss = l1(sketch, cycle_sketch)
 
-
-            """
             # identity loss (remove these for efficiency if you set lambda_identity=0)
             identity_real = gen_R(real)
             identity_sketch = gen_S(sketch)
             identity_real_loss = l1(real, identity_real)
             identity_sketch_loss = l1(sketch, identity_sketch)
-            """
+            
             # add all together
             G_loss = (
                 loss_G_R
                 + loss_G_S
                 + cycle_real_loss * config.LAMBDA_CYCLE
-                + cycle_sketch_loss * config.LAMBDA_CYCLE
-                #+ identity_sketch_loss * config.LAMBDA_IDENTITY
-                #+ identity_real_loss * config.LAMBDA_IDENTITY
+                + cycle_sketch_loss * config.LAMBDA_CYCLE_SKETCH
+                + identity_sketch_loss * config.LAMBDA_IDENTITY
+                + identity_real_loss * config.LAMBDA_IDENTITY
             )
 
         opt_gen.zero_grad()
@@ -80,12 +58,39 @@ def train_fn(disc_S, disc_R, gen_R, gen_S, train_loader, val_loader, opt_disc, o
         g_scaler.step(opt_gen)
         g_scaler.update()
 
+        # Train Discriminators H and Z
+        with torch.cuda.amp.autocast():
+            
+            D_S_real = disc_S(sketch)
+            D_S_fake = disc_S(fake_sketch.detach())
+            D_S_real_loss = mse(D_S_real, torch.ones_like(D_S_real))
+            D_S_fake_loss = mse(D_S_fake, torch.zeros_like(D_S_fake))
+            D_S_loss = (D_S_real_loss + D_S_fake_loss)/2
+
+            D_R_real = disc_R(real)
+            D_R_fake = disc_R(fake_real.detach())
+            D_R_real_loss = mse(D_R_real, torch.ones_like(D_R_real))
+            D_R_fake_loss = mse(D_R_fake, torch.zeros_like(D_R_fake))
+            D_R_loss = (D_R_real_loss + D_R_fake_loss)/2
+
+            # put it togethor
+            D_loss = (D_S_loss + D_R_loss) / 2
+
+        opt_disc.zero_grad()
+        d_scaler.scale(D_loss).backward()
+        d_scaler.step(opt_disc)
+        d_scaler.update()
+
+
+
        
-        if idx % 400 == 0:
-           save_some_examples(gen_R, val_loader, epoch = idx/100, folder = config.OUTPUT_DIR_EVAL)
+        if idx % 200 == 0:
+           save_some_examples(gen_R, val_loader, epoch, idx, folder = config.OUTPUT_DIR_EVAL_REAL)
+           save_some_examples(gen_S, val_loader, epoch, idx, folder = config.OUTPUT_DIR_EVAL_SKETCH)        
         
         if idx % 10 == 0:
             loop.set_postfix(
+            
                 D_loss=D_loss.item(),
                 G_loss=G_loss.item(),
             )
@@ -95,21 +100,23 @@ def train_fn(disc_S, disc_R, gen_R, gen_S, train_loader, val_loader, opt_disc, o
   
 
 
-def main(learn_rate, train=True):
+def main(learn_rate, checkpoint_gen_sketch = config.CHECKPOINT_GEN_SKETCH, checkpoint_gen_real = config.CHECKPOINT_GEN_REAL, checkpoint_critic_sketch = config.CHECKPOINT_CRITIC_SKETCH, checkpoint_critic_real = config.CHECKPOINT_CRITIC_REAL, train=True):
 
     disc_S = Discriminator(in_channels=3).to(config.DEVICE)
     disc_R = Discriminator(in_channels=3).to(config.DEVICE)
     gen_R = Generator(img_channels=3, num_residuals=9).to(config.DEVICE)
     gen_S = Generator(img_channels=3, num_residuals=9).to(config.DEVICE)
+
+
     opt_disc = optim.Adam(
         list(disc_S.parameters()) + list(disc_R.parameters()),
-        lr=config.LEARNING_RATE,
+        lr=float(learn_rate),
         betas=(0.5, 0.999),
     )
 
     opt_gen = optim.Adam(
-        list(gen_R.parameters()) + list(gen_R.parameters()),
-        lr=config.LEARNING_RATE,
+        list(gen_R.parameters()) + list(gen_S.parameters()),
+        lr=float(learn_rate),
         betas=(0.5, 0.999),
     )
 
@@ -165,30 +172,44 @@ def main(learn_rate, train=True):
 
     if train:
 
-        base_folder = "evaluation" + learn_rate + "_"
+        base_folder_real = "evaluation_real_" + learn_rate + "_"
         suffix = 1
         while True:
-            folder_name = base_folder + str(suffix).zfill(2)  # Fügt führende Nullen hinzu, falls erforderlich
+            folder_name = base_folder_real + str(suffix).zfill(2)  # Fügt führende Nullen hinzu, falls erforderlich
             full_folder_path = os.path.join(config.OUTPUT_DIR, folder_name)
-            config.OUTPUT_DIR_EVAL = full_folder_path
-            if not os.path.exists(config.OUTPUT_DIR_EVAL):
-                os.makedirs(config.OUTPUT_DIR_EVAL)
+            config.OUTPUT_DIR_EVAL_REAL = full_folder_path
+            if not os.path.exists(config.OUTPUT_DIR_EVAL_REAL):
+                os.makedirs(config.OUTPUT_DIR_EVAL_REAL)
                 break
             suffix += 1
-        print("Saving results to: ", config.OUTPUT_DIR_EVAL)    
+        print("Saving results to: ", config.OUTPUT_DIR_EVAL_REAL)  
+
+        base_folder_sketch = "evaluation_sketch_" + learn_rate + "_"
+        suffix = 1
+        while True:
+            folder_name = base_folder_sketch + str(suffix).zfill(2)  # Fügt führende Nullen hinzu, falls erforderlich
+            full_folder_path = os.path.join(config.OUTPUT_DIR, folder_name)
+            config.OUTPUT_DIR_EVAL_SKETCH = full_folder_path
+            if not os.path.exists(config.OUTPUT_DIR_EVAL_SKETCH):
+                os.makedirs(config.OUTPUT_DIR_EVAL_SKETCH)
+                break
+            suffix += 1
+        print("Saving results to: ", config.OUTPUT_DIR_EVAL_SKETCH)  
 
         for epoch in range(config.NUM_EPOCHS):
             print ("Epoch: ", epoch)
-            train_fn(disc_S, disc_R, gen_R, gen_S, train_loader, val_loader, opt_disc, opt_gen, L1, mse, d_scaler, g_scaler,)
+            train_fn(disc_S, disc_R, gen_R, gen_S, train_loader, val_loader, opt_disc, opt_gen, L1, mse, d_scaler, g_scaler, epoch)
             
             if config.SAVE_MODEL:
-                save_checkpoint(gen_S, opt_gen, filename=config.CHECKPOINT_GEN_SKETCH)
-                save_checkpoint(gen_R, opt_gen, filename=config.CHECKPOINT_GEN_REAL)
-                save_checkpoint(disc_S, opt_disc, filename=config.CHECKPOINT_CRITIC_SKETCH)
-                save_checkpoint(disc_R, opt_disc, filename=config.CHECKPOINT_CRITIC_REAL)
+                save_checkpoint(gen_S, opt_gen, filename=checkpoint_gen_sketch)
+                save_checkpoint(gen_R, opt_gen, filename=checkpoint_gen_real)
+                save_checkpoint(disc_S, opt_disc, filename=checkpoint_critic_sketch)
+                save_checkpoint(disc_R, opt_disc, filename=checkpoint_critic_real)
 
  
-        show_loss_graph(config.G_LOSS_LIST, name = "generator_loss", lr = config.LEARNING_RATE, epochs = config.NUM_EPOCHS)
+        show_loss_graph(config.G_LOSS_LIST, name = "generator_loss", lr = learn_rate, epochs = config.NUM_EPOCHS)
+        config.G_LOSS_LIST = []
+
 
     else:
         for i in range(3):

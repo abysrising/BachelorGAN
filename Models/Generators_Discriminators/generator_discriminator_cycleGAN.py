@@ -47,7 +47,11 @@ class Generator(nn.Module):
         self.down_blocks = nn.ModuleList(
             [
                 GENConvBlock(
-                    num_features, num_features * 2, kernel_size=3, stride=2, padding=1
+                    num_features, 
+                    num_features * 2, 
+                    kernel_size=3, 
+                    stride=2, 
+                    padding=1
                 ),
                 GENConvBlock(
                     num_features * 2,
@@ -168,6 +172,7 @@ def disc_test():
     x = torch.randn((5, 3, 256, 256))
     model = Discriminator(in_channels=3)
     preds = model(x)
+    
     print(preds.shape)
 
 def gen_test():
@@ -175,6 +180,7 @@ def gen_test():
     img_size = 256
     x = torch.randn((2, img_channels, img_size, img_size))
     gen = Generator(img_channels, 9)
+
     print(gen(x).shape)
 
 

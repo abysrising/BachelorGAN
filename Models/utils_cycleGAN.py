@@ -21,7 +21,7 @@ def seed_everything(seed=42):
     torch.backends.cudnn.benchmark = False
 
     
-def save_some_examples(gen, val_loader, epoch, folder):
+def save_some_examples(gen, val_loader, epoch, idx, folder):
     
     for i, (x, y) in enumerate(val_loader):
         if i == config.RANDOM_INDEX:
@@ -29,17 +29,17 @@ def save_some_examples(gen, val_loader, epoch, folder):
     x, y = x.to(config.DEVICE), y.to(config.DEVICE)
     gen.eval()
     with torch.no_grad():
+
         y_fake = gen(x)
 
         # remove normalization
-        y_fake = y_fake * 0.5 + 0.5  
+        y_fake = y_fake * 0.5 + 0.5
         x = x * 0.5 + 0.5
         y = y * 0.5 + 0.5
-
-        save_image(y_fake, folder + f"/y_gen_{epoch}.png")
-        save_image(x , folder + f"/input_{epoch}.png") 
-        if epoch == 0:
-            save_image(y, folder + f"/label_{epoch}.png") 
+        save_image(y_fake, folder + f"/y_gen_{epoch}" + f"_{idx}.png")
+        if epoch == 0 and idx == 0:
+            save_image(x , folder + f"/input_{epoch}" + f"_{idx}.png") 
+            save_image(y, folder + f"/label_{epoch}" + f"_{idx}.png") 
     gen.train()
 
 def calculate_average_loss_change(loss_list):
@@ -99,7 +99,7 @@ def show_loss_graph(loss_list, name = "loss_graph", lr = 0.0002, epochs = 200):
     save_path = os.path.join(full_folder_patch, save_name)
     plt.savefig(save_path)
     
-    plt.show()
+    #plt.show()
 
 
 def show_generated_img(gen, val_loader):
