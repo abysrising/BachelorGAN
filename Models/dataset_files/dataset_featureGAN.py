@@ -5,6 +5,7 @@ from torch.utils.data import Dataset, DataLoader
 from torchvision.utils import save_image
 import albumentations as A
 from albumentations.pytorch import ToTensorV2
+import matplotlib.pyplot as plt
 
 both_transform = A.Compose(
     [A.Resize(width=256, height=256),
@@ -16,7 +17,7 @@ both_transform = A.Compose(
 
 transform_only_input = A.Compose(
     [
-        A.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5], max_pixel_value=255.0,),
+        A.Normalize(mean=[0.5], std=[0.5], max_pixel_value=255.0,),
         ToTensorV2(),
     ]
 )
@@ -38,6 +39,8 @@ class ArtDataset(Dataset):
         return len(self.list_files_real)
 
     def __getitem__(self, index):
+
+
         real_image_filename = self.list_files_real[index]
         sketch_filename = self.list_files_sketch[index]
 
@@ -45,14 +48,34 @@ class ArtDataset(Dataset):
         sketch_path = os.path.join(self.root_dir, 'sketch', sketch_filename)
 
         real_image = np.array(Image.open(real_image_path)).astype(np.float32)
-        sketch = np.array(Image.open(sketch_path)).astype(np.float32)
-
+        
+        sketch = Image.open(sketch_path).convert("L")
+        sketch = np.array(sketch).astype(np.float32)
+        
         augmentations = both_transform(image=sketch, image0=real_image)
         input_image = augmentations["image"]
         target_image = augmentations["image0"]
 
+
         input_image = transform_only_input(image=input_image)["image"]
         target_image = transform_only_mask(image=target_image)["image"]
-
         
+
         return input_image, target_image
+
+def test_dataset_loading():
+    train_dataset = ArtDataset(root_dir="data/artworks/train")
+    train_loader = DataLoader(
+        train_dataset,
+        1,
+        shuffle=True,
+        num_workers=0,
+    )
+
+    for batch_idx, (x, y) in enumerate(train_loader):
+        print(x.shape)
+        break
+
+
+if __name__ == "__main__":
+    test_dataset_loading()

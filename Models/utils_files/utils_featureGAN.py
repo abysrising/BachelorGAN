@@ -33,9 +33,7 @@ def show_learnrate_reduction(lr_list, name="lr_reduction", lr=0.0002, epochs=200
 
 
 
-
-
-def save_some_examples(gen, val_loader, epoch, folder):
+def save_some_examples(gen, val_loader, epoch, folder, feature_extractor, get_FM_SV_VGG):
     
     for i, (x, y) in enumerate(val_loader):
         if i == config.RANDOM_INDEX:
@@ -43,7 +41,8 @@ def save_some_examples(gen, val_loader, epoch, folder):
     x, y = x.to(config.DEVICE), y.to(config.DEVICE)
     gen.eval()
     with torch.no_grad():
-        y_fake = gen(x)
+        feature_maps, style_vector = get_FM_SV_VGG(y, feature_extractor)
+        y_fake = gen(x, feature_maps, style_vector)
 
         # remove normalization
         y_fake = y_fake * 0.5 + 0.5  

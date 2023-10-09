@@ -6,6 +6,10 @@ from torchvision import transforms
 import matplotlib.pyplot as plt
 import matplotlib.image as mpimg
 import numpy as np
+import warnings
+
+warnings.filterwarnings("ignore", category=UserWarning, message=".*'weights' are deprecated.*")
+warnings.filterwarnings("ignore", category=UserWarning, message=".*The parameter 'pretrained' is deprecated.*")
 
 class SupervisedDNNClassifier(nn.Module):
     def __init__(self, num_classes):
@@ -16,17 +20,13 @@ class SupervisedDNNClassifier(nn.Module):
     def forward(self, x):
         return self.vgg(x)
 
-
 def gram_matrix(feature_map):
-   
-    h, w, c = feature_map.size(1), feature_map.size(2), feature_map.size(0)
-    
-    feature_map = feature_map.view(c, -1)
-    
-    gram = torch.matmul(feature_map, feature_map.t()) / (h * w * c)
-    
-    return gram
-
+    # Annahme: Die Eingabe feature_map hat die Form [1, C, H, W]
+    batch_size, num_channels, height, width = feature_map.size()
+    feature_map = feature_map.view(batch_size, num_channels, -1)  
+    gram = torch.matmul(feature_map, feature_map.permute(0, 2, 1))  
+    gram /= (num_channels * height * width) 
+    return gram.unsqueeze(0)  
 
 def get_feature_maps(input_image, model):
     model.eval()
@@ -50,10 +50,11 @@ def get_style_vector(f_m, model):
 
     # Berechnen Sie die Gram-Matrizen für die ausgewählten Schichten
     gram_matrices = [gram_matrix(fm) for fm in feature_maps]
+    style_vectors = [gram.view(1, -1, 1, 1) for gram in gram_matrices]
 
     # Verketten Sie die Gram-Matrizen zu einem Style-Vektor
-    style_vector = torch.cat(gram_matrices, dim=0)
-
+    style_vector = torch.cat(style_vectors, dim=1)
+    style_vector = style_vector.mean(dim=1, keepdim=True).expand(-1, 64, -1, -1) 
     return style_vector
 
 
@@ -87,6 +88,9 @@ if __name__ == "__main__":
     input_image = image_to_tensor(input_path)
 
     feature_maps, style_vector = get_FM_SV(input_image, model)
+    print(style_vector.shape)
+    for fm in feature_maps:
+        print(fm.shape)
 
 
 

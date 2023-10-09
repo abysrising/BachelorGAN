@@ -3,10 +3,10 @@ import torch.nn as nn
 import torchvision.transforms as transforms
 from torchvision import datasets
 from torch.utils.data import DataLoader
-from dataset_feature_extractor import ArtDataset
+from Models.feature_extractor.dataset_feature_extractor import ArtDataset
 from PIL import Image
 from tqdm import tqdm
-import config_feature_extractor as config
+from Models.feature_extractor import config_feature_extractor as config
 
 # Define the Autoencoder architecture
 class Autoencoder(nn.Module):
