@@ -42,7 +42,7 @@ def save_some_examples(gen, val_loader, epoch, folder, feature_extractor, get_FM
     gen.eval()
     with torch.no_grad():
         feature_maps, style_vector = get_FM_SV_VGG(y, feature_extractor)
-        y_fake = gen(x, feature_maps, style_vector)
+        y_fake = gen(x, feature_maps, style_vector, x)
 
         # remove normalization
         y_fake = y_fake * 0.5 + 0.5  

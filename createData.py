@@ -1,6 +1,6 @@
 import cv2
-from datasets import load_dataset
 from PIL import Image
+#from datasets import load_dataset
 import os
 import json
 import numpy as np
@@ -29,7 +29,7 @@ class generateData():
         self.x = imageToSketch()
         self.capable_cpu = 0
         self.sleep_time = 0
-        dataset = load_dataset("huggan/wikiart", split="train", streaming=True)
+        dataset = 1 #load_dataset("huggan/wikiart", split="train", streaming=True) 
         print("===========================================================")
         self.adjust_data(self.folder_path, dataset)
 
@@ -178,8 +178,7 @@ class imageToSketch():
 
     def canny_edge_detection(self, image_path):
         # Load the image using PIL
-        image = Image.open(image_path)
-
+    
         # Convert PIL.Image.Image to a Numpy Array
         image_array = np.array(image)
 
@@ -207,8 +206,8 @@ class imageToSketch():
         plt.imshow(canny_edge, cmap='gray')
 
         plt.show()
-
-
+        return auto_canny
+    
     def HED_edge_detection(self, image, thickness):
 
         # Load image and extract dimensions
@@ -229,11 +228,10 @@ class imageToSketch():
         hed = self.net.forward()
         hed = hed[0,0,:,:]  #Drop the other axes 
         #hed = cv2.resize(hed[0, 0], (W, H))
-        hed = (255 * hed).astype("uint8")  #rescale to 0-255
-        inverted_hed = 255 - hed
 
-        blob = 0,
-        hed = 0,
+        hed = (255 * hed).astype("uint8")  #rescale to 0-255
+
+        inverted_hed = 255 - hed
 
         """
         # Plot 
@@ -265,10 +263,10 @@ class imageToSketch():
 
     def thinning(self, image):
         # Anwenden von Morphologieoperationen, um das Bild auszudünnen
-        kernel = cv2.getStructuringElement(cv2.MORPH_CROSS, (3, 3))
-        thinned_image = cv2.morphologyEx(image, cv2.MORPH_OPEN, kernel, iterations=1)
+        kernel = cv2.getStructuringElement(cv2.MORPH_CROSS, (1,1))
+        thinned_image = cv2.morphologyEx(image, cv2.MORPH_OPEN, kernel, iterations=2)
         return thinned_image
-    
+
     def remove_small_components(self, binary_image, min_size):
         # Connected Component Labeling
         num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(binary_image, connectivity=8)
@@ -277,8 +275,11 @@ class imageToSketch():
         filtered_image = np.zeros_like(binary_image)
         for label in range(1, num_labels):
             if stats[label, cv2.CC_STAT_AREA] >= min_size:
+                
                 filtered_image[labels == label] = 255
-
+            elif stats[label, cv2.CC_STAT_AREA] < min_size:
+                filtered_image[labels == label] = 0
+        
         """
         # Plot
         plt.subplot(1, 2, 1)
@@ -291,6 +292,7 @@ class imageToSketch():
 
         plt.show()        
         """
+        
         return filtered_image
 
 
@@ -309,6 +311,7 @@ class imageToSketch():
 
         plt.show()
         """
+
         return eroded_image
     
 
@@ -361,14 +364,16 @@ class imageToSketch():
             self.initialize_net()
 
         hed_thickness = 0.7
-        remove_ojects_size = 100 
+        remove_ojects_size = 200
         erode_kernel_size = 3
-        cleaned_image_kernel_size = 5
+        cleaned_image_kernel_size = 3
 
+        # Canny edge detection
+        #in_image = self.canny_edge_detection(image)
         # HED on image
-        hed_image = self.HED_edge_detection(image, hed_thickness)
+        in_image = self.HED_edge_detection(image, hed_thickness)
         # Binarize and thin output of HED
-        bin_thin_image = self.binarization_and_thinning(hed_image)
+        bin_thin_image = self.binarization_and_thinning(in_image)
         # Remove small components
         scm_image = self.remove_small_components(bin_thin_image, remove_ojects_size)
         # Erode image
@@ -384,47 +389,59 @@ class imageToSketch():
 
 
 
-"""
-def convert_json_to_png(output_folder, input_folder, start_index=4452):
-    output_directory = output_folder
-    input_directory = input_folder
-
-    for idx, file in enumerate(sorted(os.listdir(input_directory))):
-        if idx < start_index:
-            continue
-
-        f = os.path.join(input_directory, file)
-        with open(f, "r") as json_file:
-            data = json.load(json_file)
-
-        array = np.array(data["image"])
-        array_sketch = np.array(data["sketch"])
-
-        array = array.astype(np.uint8)
-        array_sketch = array_sketch.astype(np.uint8)
-
-        pil_sketch = Image.fromarray(array_sketch)
-        pil_image = Image.fromarray(array)
-
-        output_path_sketch = os.path.join(output_directory, "sketch", f"{file}.sketch.png")
-        output_path = os.path.join(output_directory, "image", f"{file}.png")
-        os.makedirs(os.path.dirname(output_path_sketch), exist_ok=True)
-        os.makedirs(os.path.dirname(output_path), exist_ok=True)
-
-        pil_image.save(output_path)
-        pil_sketch.save(output_path_sketch)
-
-        print(f"Image saved: {output_path}")
-        print(f"Sketch saved: {output_path_sketch}")
-"""
-
-
-
 if __name__ == "__main__":
 
     #y = generateData()
     x = imageToSketch()
+    original_image = Image.open("Images/image.jpg")
+
+    # Skalieren des Bildes auf 256x256
+    resized_image = original_image.resize((256, 256))
+
+    # Erstellen eines Plots mit beiden Bildern nebeneinander
+    fig, axes = plt.subplots(1, 2, figsize=(10, 5))  # Eine Zeile, zwei Spalten
+
+    # Originalbild auf die linke Seite des Plots
+    axes[0].imshow(original_image)
+    original_size = original_image.size  # Originalgröße des Bildes
+    axes[0].set_title(f"Original Image ({original_size[0]}x{original_size[1]})")
+    axes[0].axis('off')
+
+    # Skaliertes Bild auf die rechte Seite des Plots
+    axes[1].imshow(resized_image)
+    axes[1].set_title("Resized Image (256x256)")
+    axes[1].axis('off')
+
+    # Anzeigen des Plots
+    plt.show()
+
+    image = x.image_to_sketch(original_image)
+
+    # Skalieren des Bildes auf 256x256
+    resized_image = image.resize((256, 256))
+
+    # Erstellen eines Plots mit beiden Bildern nebeneinander
+    fig, axes = plt.subplots(1, 2, figsize=(10, 5))  # Eine Zeile, zwei Spalten
+
+    # Originalbild auf die linke Seite des Plots
+    axes[0].imshow(image)
+    original_size = image.size  # Originalgröße des Bildes
+    axes[0].set_title(f"Original Sketch ({original_size[0]}x{original_size[1]})")
+    axes[0].axis('off')
+
+    # Skaliertes Bild auf die rechte Seite des Plots
+    axes[1].imshow(image)
+    axes[1].set_title("Resized Sketch (256x256)")
+    axes[1].axis('off')
+
+    # Anzeigen des Plots
+    plt.show()
+
+
+
+    image.save("Images/output_sketch.png")
     
+
     #x.canny_edge_detection("Images/exampleoriginalsize.jpg")
 
     #convert_json_to_png("train", "data/artworks/train")

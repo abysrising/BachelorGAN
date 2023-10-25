@@ -22,7 +22,7 @@ from Models.feature_extractor.VGGClassifier import get_FM_SV as get_FM_SV_VGG
 if __name__ == "__main__":
     learn_rates_pix2pix = [0.00006, 0.0004, 0.0003, 0.0001, 0.00006]
     learn_rates_cycleGAN = [0.0002, 0.0004, 0.0005, 0.00006, 0.00004]    
-    learn_rates_featureGAN = [0.00001, 0.00004, 0.00003, 0.00002, 0.00006]
+    learn_rates_featureGAN = [0.0001, 0.00009]
 
    
     for learn_rate in learn_rates_featureGAN:

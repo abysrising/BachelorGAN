@@ -31,6 +31,7 @@ def get_random_data(dataset, paired=True, used_indices=[]):
         # Verwenden Sie eine Liste, um bereits ausgewählte Indizes zu speichern
         batch_x = []
         batch_y = []
+        batch_y_sketch = []
 
         while True:
             random_idx = random.randint(0, len(dataset) - 1)
@@ -41,13 +42,15 @@ def get_random_data(dataset, paired=True, used_indices=[]):
                 x, y = dataset[random_idx]
                 batch_x.append(x)
                 batch_y.append(y)
-                return torch.stack(batch_x), torch.stack(batch_y)
+                batch_y_sketch.append(x)
+                return torch.stack(batch_x), torch.stack(batch_y), torch.stack(batch_y_sketch)
     else:
         # Wählen Sie zufällige ungepaarte Elemente aus dem Dataset
         random_idx_x = random.randint(0, len(dataset) - 1)
 
         batch_x = []
         batch_y = []
+        batch_y_sketch = []
         # Verwenden Sie eine Liste, um bereits ausgewählte x-Indizes zu speichern
 
         while True:
@@ -67,12 +70,15 @@ def get_random_data(dataset, paired=True, used_indices=[]):
         
         x = dataset[random_idx_x][0]
         y = dataset[random_idx_y][1]
+        y_sketch = dataset[random_idx_y][0]
+
         batch_x.append(x)
         batch_y.append(y)
+        batch_y_sketch.append(y_sketch)
         # Fügen Sie die ausgewählten Indizes zur entsprechenden Liste hinzu
         used_indices.append(random_idx_x)
         
-        return torch.stack(batch_x), torch.stack(batch_y)
+        return torch.stack(batch_x), torch.stack(batch_y), torch.stack(batch_y_sketch)
 
 def train_fn(disc, gen, loader, opt_disc, opt_gen, l1_loss, bce, g_scaler, d_scaler, sch_gen, sch_disc, epoch, feature_extractor, paired=True, used_indices=[]):
     loop = tqdm(loader, leave=True)
@@ -82,10 +88,11 @@ def train_fn(disc, gen, loader, opt_disc, opt_gen, l1_loss, bce, g_scaler, d_sca
 
    
     for idx, (x, y) in enumerate(loop):
-        x_gen, y_gen = get_random_data(loader.dataset, paired, used_indices)
+        x_gen, y_gen, y_gen_sketch = get_random_data(loader.dataset, paired, used_indices)
         
         x_gen = x_gen.to(config.DEVICE)
         y_gen = y_gen.to(config.DEVICE)
+        y_gen_sketch = y_gen_sketch.to(config.DEVICE)
         x = x.to(config.DEVICE)
         y = y.to(config.DEVICE)
 
@@ -100,10 +107,10 @@ def train_fn(disc, gen, loader, opt_disc, opt_gen, l1_loss, bce, g_scaler, d_sca
         
         # Train Discriminator
         with torch.cuda.amp.autocast():
-            y_fake = gen(x_gen, feature_maps_gen, style_vector_gen)
+            y_fake = gen(x_gen, feature_maps_gen, style_vector_gen, y_gen_sketch)
 
             D_real, predicted_style_real, predicted_sketch_real = disc(y, style_vector)
-            D_fake, predicted_style_fake, predicted_sketch_fake = disc(y_fake.detach(), style_vector)
+            D_fake, predicted_style_fake, predicted_sketch_fake = disc(y_fake.detach(), style_vector_gen)
 
             D_Content_loss = F.mse_loss(predicted_sketch_real, x)
             D_Style_loss = F.mse_loss(predicted_style_real, style_vector)
@@ -123,12 +130,12 @@ def train_fn(disc, gen, loader, opt_disc, opt_gen, l1_loss, bce, g_scaler, d_sca
         # Train generator
         with torch.cuda.amp.autocast():
             
-            D_fake, predicted_style_fake, predicted_sketch_fake = disc(y_fake, style_vector)
+            D_fake, predicted_style_fake, predicted_sketch_fake = disc(y_fake, style_vector_gen)
             
             G_fake_loss = bce(D_fake, torch.ones_like(D_fake))
 
-            G_Content_loss = F.mse_loss(predicted_sketch_fake, x_gen)
-            G_Style_loss = F.mse_loss(predicted_style_fake, style_vector_gen)
+            G_Content_loss = F.mse_loss(predicted_sketch_fake, x_gen) *3
+            G_Style_loss = F.mse_loss(predicted_style_fake, style_vector_gen) *3
 
             G_loss = G_fake_loss + G_Content_loss + G_Style_loss
             if paired == False:
@@ -166,7 +173,7 @@ def train_fn(disc, gen, loader, opt_disc, opt_gen, l1_loss, bce, g_scaler, d_sca
 
             )
 
-    if epoch >= 30:
+    if epoch >= 5:
         config.LR_REDUCTION = True
         scheduler_gen.step(G_loss)
         scheduler_disc.step(D_loss)
@@ -245,9 +252,9 @@ def main(learn_rate, gen_checkpoint = config.CHECKPOINT_GEN, disc_checkpoint = c
         for epoch in range(config.NUM_EPOCHS):
             print ("Epoch: ", epoch)
             train_fn(
-                disc, gen, train_loader, opt_disc, opt_gen, L1_LOSS, BCE, g_scaler, d_scaler, schedular_gen, schedular_disc, epoch, feature_extractor_VGG, paired=True if epoch % 2 == 0 else False, used_indices=[]
+                disc, gen, train_loader, opt_disc, opt_gen, L1_LOSS, BCE, g_scaler, d_scaler, schedular_gen, schedular_disc, epoch, feature_extractor_VGG, paired=True if epoch %2 == 0 else False, used_indices=[]
             )
-            
+
 
             if config.SAVE_MODEL and epoch % 2 == 0:
                 save_checkpoint(gen, opt_gen, filename=gen_checkpoint)
@@ -262,8 +269,8 @@ def main(learn_rate, gen_checkpoint = config.CHECKPOINT_GEN, disc_checkpoint = c
         show_loss_graph(config.G_LOSS_LIST, name = "generator_loss", lr = learn_rate, epochs = config.NUM_EPOCHS)
         show_loss_graph(config.D_LOSS_LIST, name = "discriminator_loss", lr = learn_rate, epochs = config.NUM_EPOCHS)
 
-        show_learnrate_reduction(config.LR_LIST_GEN, name = "generator_learnrate_reduction", lr = learn_rate, epochs = config.NUM_EPOCHS)
-        show_learnrate_reduction(config.LR_LIST_DISC, name = "discriminator_learnrate_reduction", lr = learn_rate, epochs = config.NUM_EPOCHS)
+        #show_learnrate_reduction(config.LR_LIST_GEN, name = "generator_learnrate_reduction", lr = learn_rate, epochs = config.NUM_EPOCHS)
+        #show_learnrate_reduction(config.LR_LIST_DISC, name = "discriminator_learnrate_reduction", lr = learn_rate, epochs = config.NUM_EPOCHS)
 
 
         config.LR_LIST_GEN = []

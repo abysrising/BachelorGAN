@@ -21,37 +21,57 @@ from Models.feature_extractor.Autoencoder import main as train_autoencoder
 
 from Models.feature_extractor.Autoencoder import get_FM_SV as get_FM_SV_autoencoder
 from Models.feature_extractor.VGGClassifier import get_FM_SV as get_FM_SV_VGG
-
+from torch.nn.utils import spectral_norm
 feature_map_list = []
 
 
 #region RESCode - Residual Block Code
-class AttentionLayer(nn.Module):
-    def __init__(self, in_channels, style_dim):
-        super(AttentionLayer, self).__init__()
-        self.fc = nn.Linear(style_dim, in_channels)  
+class AttentionBasedResidualBlock(nn.Module):
+    def __init__(self, inplanes, planes, style_dim=64, stride=1, groups=1,
+                 base_width=64, dilation=1, norm_layer=None, upsample=False):
+        super(AttentionBasedResidualBlock, self).__init__()
+        self.conv1 = nn.Conv2d(inplanes, planes, kernel_size=3, stride=stride, padding=1, bias=False)
+        self.bn1 = nn.BatchNorm2d(planes)
+        self.relu = nn.ReLU(inplace=True)
+        self.conv2 = nn.Conv2d(planes, planes, kernel_size=3, stride=1, padding=1, bias=False)
+        self.bn2 = nn.BatchNorm2d(planes)
 
-    def forward(self, x, style_vector):
+        # Style vector processing
+        self.style_fc = nn.Linear(style_dim, planes)  # Linear layer for style vector
+        self.conv_style = nn.Conv2d(planes, planes, kernel_size=1, stride=1, padding=0, bias=False)
        
-        style_vector = style_vector.transpose(1, 3)
-        style_weights = self.fc(style_vector)
-        style_weights = style_weights.transpose(1, 3)
+        self.conv_upsample = nn.Conv2d(inplanes, planes, kernel_size=1, stride=1, padding=0, bias=False)
 
-        return x * style_weights
-
-class AttentionResidualBlock(nn.Module):
-    def __init__(self, in_channels, out_channels, style_dim=64, stride=1):
-        super().__init__()
-        self.conv1 = nn.Conv2d(in_channels, out_channels, 3, stride, padding=1)
-        self.conv2 = nn.Conv2d(out_channels, out_channels, 3, stride, padding=1)
-        self.attention = AttentionLayer(out_channels, style_dim=style_dim)
+        self.style_dim = style_dim
+        self.stride = stride
+        self.planes = planes
+        self.upsample = upsample
 
     def forward(self, x, style_vector):
         residual = x
         out = self.conv1(x)
+        out = self.bn1(out)
+        out = self.relu(out)
+
         out = self.conv2(out)
-        out = self.attention(out, style_vector)
+        out = self.bn2(out)
+
+        # Style vector processing
+        style_weights = self.style_fc(style_vector)
+        style_weights = style_weights.view(1, self.planes, 1, 1)
+        style_weights = self.conv_style(style_weights)
+
+        out = out * style_weights
+
+        if residual.size(1) != out.size(1):
+            residual = self.conv_upsample(residual)
+    
+        if self.upsample == True:
+            residual = F.interpolate(residual, size=out.shape[2:])
+
+      
         out += residual
+        out = self.relu(out)
 
         return out
 #endregion
@@ -61,27 +81,20 @@ class AttentionResidualBlock(nn.Module):
 class DMILayer(nn.Module):
     def __init__(self, in_channels):
         super().__init__()
-        self.wc = nn.Parameter(torch.ones(1, in_channels, 1, 1))
-        self.bc = nn.Parameter(torch.zeros(1, in_channels, 1, 1))
-        self.wp = nn.Parameter(torch.ones(1, in_channels, 1, 1))
-        self.bp = nn.Parameter(torch.zeros(1, in_channels, 1, 1))
-      
-    def forward(self, feature_map, sketch):
-     
-      
-        sketch = nn.functional.interpolate(sketch, size=feature_map.shape[-2:], mode='bilinear', align_corners=False)
-        sketch = sketch.expand_as(feature_map)
-   
-        contour_area = sketch * feature_map
-        plain_area = (1 - sketch) * feature_map
-    
-        f0c = self.wc * contour_area + self.bc
-        f0p = self.wp * plain_area + self.bp
+        self.weight_a = nn.Parameter(torch.ones(1, in_channels, 1, 1)*1.01)
+        self.bias_a = nn.Parameter(torch.zeros(1, in_channels, 1, 1)+0.01)
+        self.weight_b = nn.Parameter(torch.ones(1, in_channels, 1, 1)*0.99)
+        self.bias_b = nn.Parameter(torch.zeros(1, in_channels, 1, 1)-0.01)
 
-        output_feature_map = f0c + f0p
-    
-        return output_feature_map
-
+    def forward(self, feature_map, mask):
+        if feature_map.shape[1] > mask.shape[1]:
+            channel_scale = feature_map.shape[1] // mask.shape[1]
+            mask = mask.repeat(1, channel_scale, 1, 1)
+        
+        mask = F.interpolate(mask, size=feature_map.shape[2])
+        feat_a = self.weight_a * feature_map * mask + self.bias_a
+        feat_b = self.weight_b * feature_map * (1-mask) + self.bias_b
+        return feat_a + feat_b
 
 class GENBlock(nn.Module):
     def __init__(self, in_channels, out_channels, down=True, act="relu", use_dropout=False):
@@ -138,92 +151,113 @@ class AdaINLayer(nn.Module):
 
         return stylized_x
 
+class FMT_Layer(nn.Module):
+    def __init__(self, in_channels, out_channels, hw=64):
+        super().__init__()
+        self.conv = nn.Sequential(
+            nn.ConvTranspose2d(in_channels, out_channels, 4, 2, 1, bias=False),
+        )
+        self.ad_pool = nn.AdaptiveAvgPool2d(hw)
+        self.feat_pool = nn.Sequential(
+            nn.MaxPool2d(kernel_size=5, stride=2),
+            nn.MaxPool2d(kernel_size=5, stride=2),
+            nn.AdaptiveAvgPool2d(hw//8),
+        )
+    def rescale(self, tensor, range=(0, 1)):
+        return ((tensor - tensor.min()) / (tensor.max() - tensor.min()))*(range[1]-range[0]) + range[0]
+
+    def fmt(self, content_skt, style_skt, style_feat):
+        style_feat = self.ad_pool(style_feat)
+
+        style_skt = self.rescale(self.ad_pool(style_skt))
+        content_skt = self.rescale(self.ad_pool(content_skt))
+
+        edge_feat = style_feat * style_skt
+        plain_feat = style_feat * (1-style_skt)
+
+        edge_feat = self.feat_pool(edge_feat).repeat(1,1,8,8) 
+        plain_feat = self.feat_pool(plain_feat).repeat(1,1,8,8)
+
+        return edge_feat*content_skt + plain_feat*(1-content_skt)
+
+
+    def forward(self, x, sketch, style_sketch, fm_style):
+        conv_x = self.conv(x)
+
+        stylized_x = self.fmt(sketch, style_sketch, fm_style)
+
+        stylized_x_scaled = nn.functional.interpolate(stylized_x, size=conv_x.shape[-2:], mode='bilinear', align_corners=False)
+        
+        concatenated_x = torch.cat([conv_x, stylized_x_scaled], dim=1)
+
+        return concatenated_x
+
 class GeneratorWithDMI(nn.Module):
-    def __init__(self, in_channels=3, features=64, sketch_channels=1):
+    def __init__(self, in_channels=1, features=64, feature_map_channels = 64):
         super().__init__()
         self.initial_down = nn.Sequential(
             nn.Conv2d(in_channels, features, 4, 2, 1, padding_mode="reflect"),
             nn.LeakyReLU(0.2)   
-    
         ) # 128
         
-        self.down1 = GENBlock(features, features*2, down=True, act="leaky", use_dropout=False) # 64
-        self.down2 = GENBlock(features*2, features*4, down=True, act="leaky", use_dropout=False) # 32
-        self.down3 = GENBlock(features*4, features*8, down=True, act="leaky", use_dropout=False) # 16
-        self.down4 = GENBlock(features*8, features*8, down=True, act="leaky", use_dropout=False) # 8
-        self.down5 = GENBlock(features*8, features*8, down=True, act="leaky", use_dropout=False) # 4
-        self.down6 = GENBlock(features*8, features*8, down=True, act="leaky", use_dropout=False) # 2
+        self.down1 = AttentionBasedResidualBlock(features, features*2, stride=2, upsample=True) # 64
+        self.down2 = AttentionBasedResidualBlock(features*2, features*4, stride=2, upsample=True) # 32
+        self.down3 = AttentionBasedResidualBlock(features*4, features*8, stride=2, upsample=True) # 16
+        self.down4 = AttentionBasedResidualBlock(features*8, features*8, stride=2, upsample=True) # 8
+        self.down5 = AttentionBasedResidualBlock(features*8, features*8, stride=2, upsample=True) # 4
+        self.down6 = AttentionBasedResidualBlock(features*8, features*8, stride=2, upsample=True) # 2
+
         self.bottleneck = nn.Sequential(
             nn.Conv2d(features*8, features*8, 4, 2, 1, padding_mode="reflect"), nn.ReLU(),
         ) # 1
         self.up1 = GENBlock(features*8, features*8, down=False, act="relu", use_dropout=True) # 2
         self.up2 =  GENBlock(features*8*2, features*8, down=False, act="relu", use_dropout=False) # 4
-        self.up3 = GENBlock(features*8*2, features*8, down=False, act="relu", use_dropout=False ) # 8
-        self.up4 = GENBlock(features*8*2, features*8, down=False, act="relu", use_dropout=False) # 16
-        self.up5 = GENBlock(features*8*2, features*4, down=False, act="relu", use_dropout=False) # 32
-        self.up6 = AdaINLayer(features*4*2, features*2)
-        self.up7 = AdaINLayer(features*2*2, features*1)
-        self.dmi3 = DMILayer(features*8)
-        self.dmi5 = DMILayer(features*4)
+        self.up3 = FMT_Layer(features*8*2, features*8) # 8
+        self.up4 = GENBlock(features*8*2+feature_map_channels, features*8, down=False, act="relu", use_dropout=False ) # 16
+        self.up5 = FMT_Layer(features*8*2, features*4) # 32
+        self.up6 = AdaINLayer(features*4*2+feature_map_channels, features*2) # 64
+        self.up7 = AdaINLayer(features*2*2, features*1) # 128
+        self.dmi3 = DMILayer(features*8+feature_map_channels)
+        self.dmi5 = DMILayer(features*4+feature_map_channels)
         self.final_up = nn.Sequential(
             nn.ConvTranspose2d(features*2, 3, kernel_size=4, stride=2, padding=1), 
             nn.Tanh()
  
         )   # 256
        
-        self.RESBlock1 = AttentionResidualBlock(features, features)
-        self.RESBlock2 = AttentionResidualBlock(features*2, features*2)
-        self.RESBlock3 = AttentionResidualBlock(features*4, features*4)
-        self.RESBlock4 = AttentionResidualBlock(features*8, features*8)
-        self.RESBlock5 = AttentionResidualBlock(features*8, features*8)
-        self.RESBlock6 = AttentionResidualBlock(features*8, features*8)
-
-        self.RESBlock1_1 = AttentionResidualBlock(features*8, features*8)
-        self.RESBlock1_2 = AttentionResidualBlock(features*8, features*8)
-        self.RESBlock1_3 = AttentionResidualBlock(features*8, features*8)
-        self.RESBlock1_4 = AttentionResidualBlock(features*8, features*8)
-        self.RESBlock1_5 = AttentionResidualBlock(features*4, features*4)
-        self.RESBlock1_6 = AttentionResidualBlock(features*2, features*2)
-        self.RESBlock1_7 = AttentionResidualBlock(features*1, features*1)
-
-    def forward(self, x, style_maps, style_vector):
-    
        
+        self.res1 = AttentionBasedResidualBlock(features*8, features*16, 64)
+      
+ 
+
+
+    def forward(self, x, style_maps, style_vector, y_sketch):
+        
+    
         d1 = self.initial_down(x)
-        r1 = self.RESBlock1(d1, style_vector)
-        d2 = self.down1(r1)
-        r2 = self.RESBlock2(d2, style_vector)
-        d3 = self.down2(r2)
-        r3 = self.RESBlock3(d3, style_vector)
-        d4 = self.down3(r3)
-        r4 = self.RESBlock4(d4, style_vector)
-        d5 = self.down4(r4)
-        r5 = self.RESBlock5(d5, style_vector)
-        d6 = self.down5(r5)
-        r6 = self.RESBlock6(d6, style_vector)
-        d7 = self.down6(r6)
+        d2 = self.down1(d1, style_vector)
+        d3 = self.down2(d2, style_vector)
+        d4 = self.down3(d3, style_vector)    
+        d5 = self.down4(d4, style_vector)
+        d6 = self.down5(d5, style_vector)
+        d7 = self.down6(d6, style_vector)
 
         bottleneck = self.bottleneck(d7)
 
         up1 = self.up1(bottleneck)
-        r1_1 = self.RESBlock1_1(up1, style_vector)
-        up2 = self.up2(torch.cat([r1_1, d7], 1))
-        r1_2 = self.RESBlock1_2(up2, style_vector)
-        up3 = self.up3(torch.cat([r1_2, d6], 1))
-        r1_3 = self.RESBlock1_3(up3, style_vector)
-        dmi3 = self.dmi3(r1_3, x)
+        up2 = self.up2(torch.cat([up1, d7], 1))
+        up3 = self.up3(torch.cat([up2, d6], 1), x , y_sketch, style_maps[0])
+     
+        dmi3 = self.dmi3(up3, x)
         up4 = self.up4(torch.cat([dmi3, d5], 1))
-        r1_4 = self.RESBlock1_4(up4, style_vector)
-        up5 = self.up5(torch.cat([r1_4, d4], 1))
-        r1_5 = self.RESBlock1_5(up5, style_vector)
-        dmi5 = self.dmi5(r1_5, x)
-        up6 = self.up6(torch.cat([dmi5, d3], 1), style_maps[0])
-        r1_6 = self.RESBlock1_6(up6, style_vector)
-        up7 = self.up7(torch.cat([r1_6, d2], 1), style_maps[1])
-        r1_7 = self.RESBlock1_7(up7, style_vector)
-      
+    
+        up5 = self.up5(torch.cat([up4, d4], 1), x, y_sketch, style_maps[0])
+        dmi5 = self.dmi5(up5, x)
 
-        return self.final_up(torch.cat([r1_7, d1], 1))
+        up6 = self.up6(torch.cat([dmi5, d3], 1), style_maps[0])
+        up7 = self.up7(torch.cat([up6, d2], 1), style_maps[0])
+        
+        return self.final_up(torch.cat([up7, d1], 1))
 #endregion
 
 #region DISCode - Discriminator Code
@@ -243,59 +277,33 @@ class StylePredictionMLP(nn.Module):
         return predicted_style.view(batch_size, -1, 1, 1)  # Die Ausgabe auf die gewünschte Form umformen
 
 class IDNLayer(nn.Module):
-    def __init__(self, in_channels, hidden_dim, num_styles):
-        super(IDNLayer, self).__init__()
-        self.in_channels = in_channels
 
-        # Define layers for predicting µ_style
-        self.conv_mu = nn.Conv2d(in_channels, in_channels, kernel_size=1)
+    def __init__(self, in_channel, style_dim, content_channel=1):
+        super().__init__()
+        
+        self.style_mu_conv = nn.Sequential(
+            spectral_norm(nn.Conv2d(in_channel, in_channel, 4, 2, 1)), nn.LeakyReLU(0.1),
+            spectral_norm(nn.Conv2d(in_channel, in_channel, 4, 2, 1)), nn.LeakyReLU(0.1),
+            nn.AdaptiveAvgPool2d(1))
+        self.to_style = nn.Linear(in_channel*2, style_dim)
 
-        # Define layers for predicting σ_style
-        self.conv_sigma = nn.Conv2d(in_channels, in_channels, kernel_size=1)
+        self.to_content = nn.Sequential(
+            spectral_norm(nn.Conv2d(in_channel, in_channel, 3, 1, 1)), nn.LeakyReLU(0.1),
+            spectral_norm(nn.Conv2d(in_channel, content_channel, 3, 1, 1)), nn.LeakyReLU(0.1),
+            nn.AdaptiveAvgPool2d(256))
 
-        # Style Prediction MLP
-        self.style_prediction_mlp = StylePredictionMLP(in_channels, hidden_dim, num_styles)
+    def forward(self, feat):
+        b, c, _, _ = feat.size()
 
+        style_mu = self.style_mu_conv(feat)
 
-        # Convolutional layers for predicting the sketch
-        self.conv_sketch = nn.Sequential(
-            nn.ConvTranspose2d(in_channels, 128, kernel_size=4, stride=2, padding=1),  
-            nn.ReLU(inplace=True),
-            nn.ConvTranspose2d(128, 64, kernel_size=4, stride=2, padding=0),  
-            nn.ReLU(inplace=True),
-            nn.ConvTranspose2d(64, 32, kernel_size=4, stride=2, padding=0),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(32, 1, kernel_size=3, stride=1, padding=2)  
-        )
-
-
-    def forward(self, feature_map):
-        # Reshape µ_style and σ_style to [B, C, 1, 1]
-
-        mu_style = self.conv_mu(feature_map)
-        sigma_style = self.conv_sigma(feature_map)
-
-        batch_size, num_channels, height, width = feature_map.size()
-        mu_style = mu_style.view(batch_size, num_channels, height, width).mean(dim=(2, 3), keepdim=True)
-        sigma_style = sigma_style.view(batch_size, num_channels, height, width).mean(dim=(2, 3), keepdim=True)
-
-
-        # Calculate σ_style
-        sigma_style = torch.sigmoid(sigma_style)
-
-        # Style vector
-        style_vector = torch.cat((mu_style, sigma_style), dim=1)
-
-        # Style Prediction
-        predicted_style = self.style_prediction_mlp(style_vector)
-      
-        # Calculate content feature map
-        content_feature_map = (feature_map - mu_style) / (sigma_style + 1e-6)  # Small epsilon added for numerical stability
-
-        # Calculate sketch
-        predicted_sketch = self.conv_sketch(content_feature_map)
-       
-        return predicted_style, predicted_sketch
+        feat_no_style_mu = feat - style_mu
+        style_sigma = feat_no_style_mu.view(b, c, -1).std(-1)
+        feat_content = feat_no_style_mu / style_sigma.view(b,c,1,1)
+        style = self.to_style( torch.cat([style_mu.view(b,-1), style_sigma.view(b,-1)], dim=1) )
+        content = self.to_content(feat_content)
+        
+        return content, style
 
 class DISCBlock(nn.Module):
     def __init__(self, in_channels, out_channels, stride=2):
@@ -310,7 +318,7 @@ class DISCBlock(nn.Module):
 
 class Discriminator(nn.Module):
     
-    def __init__(self, in_channels=3, features=[64, 128, 256, 512], hidden_dim=128, num_styles=64):
+    def __init__(self, in_channels=3, features=[64, 128, 256, 512], style_dim=64):
         super().__init__()
 
         self.initial = nn.Sequential(
@@ -326,10 +334,13 @@ class Discriminator(nn.Module):
         self.final = nn.Conv2d(features[3], 1, kernel_size=4, stride=1, padding=1, padding_mode="reflect")
     
         # IDN Layer
-        self.idn_layer = IDNLayer(features[3], hidden_dim, num_styles)
+        self.idn_layer = IDNLayer(features[3], style_dim)
+
+        """"
         self.RESBlock1 = AttentionResidualBlock(features[1], features[1])
         self.RESBlock2 = AttentionResidualBlock(features[2], features[2])
         self.RESBlock3 = AttentionResidualBlock(features[3], features[3])
+        """
 
     def forward(self, y, style_vector):
 
@@ -337,18 +348,20 @@ class Discriminator(nn.Module):
         init = self.initial(y)
         
         down1 = self.down1(init)
-        r1 = self.RESBlock1(down1, style_vector)
+        #r1 = self.RESBlock1(down1, style_vector)
         
-        down2 = self.down2(r1)
-        r2 = self.RESBlock2(down2, style_vector)
+        down2 = self.down2(down1)
+        #r2 = self.RESBlock2(down2, style_vector)
        
-        down3 = self.down3(r2)
-        r3 = self.RESBlock3(down3, style_vector)
+        down3 = self.down3(down2)
+        #r3 = self.RESBlock3(down3, style_vector)
 
         
-        final = self.final(r3)
+        final = self.final(down3)
         
-        predicted_style, predicted_sketch = self.idn_layer(r3)
+        
+        predicted_sketch, predicted_style = self.idn_layer(down3)
+      
 
         return final, predicted_style, predicted_sketch
 
@@ -387,19 +400,17 @@ def visualize_feature_maps(feature_maps, title, num_feature_maps_to_show=10):
     fig.suptitle(title)
     plt.show()
 
-def gen_test(x = None, style_maps = None, input_image = None, style_vector = None):
+def gen_test(x = None, style_maps = None, input_image = None, style_vector = None, y_sketch = None):
 
-    if x is None and style_maps is None:
-        x = torch.randn(1, 1, 256, 256).cuda()
-        style_maps = [torch.randn(1, 64, 256, 256).cuda(), torch.randn(1, 128, 128, 128).cuda(), torch.randn(1, 256, 64, 64).cuda()]
-    else:
-        x = x.cuda()
-        style_maps = [style_map.cuda() for style_map in style_maps]
+    x = x.cuda()
+    style_maps = [style_map.cuda() for style_map in style_maps]
 
+    y_sketch = y_sketch.cuda()
     style_vector = style_vector.cuda()
 
+    
     model = GeneratorWithDMI(in_channels=1, features=64).cuda()
-    preds = model(x, style_maps, style_vector)
+    preds = model(x, style_maps, style_vector, y_sketch)
 
     print(preds.shape)
     plt.imshow(input_image[0].permute(1, 2, 0))
@@ -426,12 +437,12 @@ transform_only_input = A.Compose(
 #endregion
 
 if __name__ == "__main__":
-    disc_test()
+    #disc_test()
 
-    """
+
     feature_extractor = train_VGGClassifier()
-    input_path = "data/artworks/train/image/21750_artist108_style23_genre1.png"
-    x_path = "data/artworks/train/image/21750_artist108_style23_genre1.png"
+    input_path = "C:/Users/ls26527/GAN/BachelorGAN/data/artworks/train/image/151_artist11_style12_genre4.png"
+    x_path = "C:/Users/ls26527/GAN/BachelorGAN/data/artworks/train/sketch/151_artist11_style12_genre4.sketch.png"
     
     input_image = image_to_tensor(input_path)
  
@@ -445,7 +456,10 @@ if __name__ == "__main__":
     sketch_image = transform_only_input(image=sketch_image)["image"] 
     sketch_image = sketch_image.unsqueeze(0)
 
+    y_sketch = sketch_image
+
+
     feature_maps, style_vector = get_FM_SV_VGG(input_image, feature_extractor)
     
-    gen_test(sketch_image, feature_maps, input_image, style_vector)
-    """
+    gen_test(sketch_image, feature_maps, input_image, style_vector, sketch_image)
+    

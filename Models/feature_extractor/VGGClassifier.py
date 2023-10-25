@@ -31,7 +31,7 @@ def gram_matrix(feature_map):
 def get_feature_maps(input_image, model):
     model.eval()
 
-    layers_to_extract = [0, 5, 10] 
+    layers_to_extract = [0] 
 
     feature_maps = []
     x = input_image
@@ -50,11 +50,13 @@ def get_style_vector(f_m, model):
 
     # Berechnen Sie die Gram-Matrizen für die ausgewählten Schichten
     gram_matrices = [gram_matrix(fm) for fm in feature_maps]
-    style_vectors = [gram.view(1, -1, 1, 1) for gram in gram_matrices]
+    style_vectors = [gram.view(1, -1) for gram in gram_matrices]
 
     # Verketten Sie die Gram-Matrizen zu einem Style-Vektor
     style_vector = torch.cat(style_vectors, dim=1)
-    style_vector = style_vector.mean(dim=1, keepdim=True).expand(-1, 64, -1, -1) 
+    
+    style_vector = style_vector.mean(dim=1, keepdim=True).expand(-1, 64) 
+
     return style_vector
 
 
