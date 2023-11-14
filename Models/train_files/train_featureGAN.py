@@ -86,6 +86,7 @@ def train_fn(disc, gen, loader, opt_disc, opt_gen, l1_loss, bce, g_scaler, d_sca
     scheduler_gen = sch_gen
     scheduler_disc = sch_disc
 
+    # x, y, x_gen, y_gen, y_gen_sketch 
    
     for idx, (x, y) in enumerate(loop):
         x_gen, y_gen, y_gen_sketch = get_random_data(loader.dataset, paired, used_indices)
@@ -134,11 +135,11 @@ def train_fn(disc, gen, loader, opt_disc, opt_gen, l1_loss, bce, g_scaler, d_sca
             
             G_fake_loss = bce(D_fake, torch.ones_like(D_fake))
 
-            G_Content_loss = F.mse_loss(predicted_sketch_fake, x_gen) *3
-            G_Style_loss = F.mse_loss(predicted_style_fake, style_vector_gen) *3
+            G_Content_loss = F.mse_loss(predicted_sketch_fake, x_gen) 
+            G_Style_loss = F.mse_loss(predicted_style_fake, style_vector_gen) 
 
             G_loss = G_fake_loss + G_Content_loss + G_Style_loss
-            if paired == False:
+            if paired == True:
                 additional_loss = F.mse_loss(y_fake, y_gen)
                 G_loss = G_loss + additional_loss
         
@@ -173,7 +174,7 @@ def train_fn(disc, gen, loader, opt_disc, opt_gen, l1_loss, bce, g_scaler, d_sca
 
             )
 
-    if epoch >= 5:
+    if epoch >= 10:
         config.LR_REDUCTION = True
         scheduler_gen.step(G_loss)
         scheduler_disc.step(D_loss)
@@ -254,7 +255,7 @@ def main(learn_rate, gen_checkpoint = config.CHECKPOINT_GEN, disc_checkpoint = c
             train_fn(
                 disc, gen, train_loader, opt_disc, opt_gen, L1_LOSS, BCE, g_scaler, d_scaler, schedular_gen, schedular_disc, epoch, feature_extractor_VGG, paired=True if epoch %2 == 0 else False, used_indices=[]
             )
-
+            
 
             if config.SAVE_MODEL and epoch % 2 == 0:
                 save_checkpoint(gen, opt_gen, filename=gen_checkpoint)

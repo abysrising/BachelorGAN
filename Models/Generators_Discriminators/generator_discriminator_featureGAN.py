@@ -31,10 +31,10 @@ class AttentionBasedResidualBlock(nn.Module):
                  base_width=64, dilation=1, norm_layer=None, upsample=False):
         super(AttentionBasedResidualBlock, self).__init__()
         self.conv1 = nn.Conv2d(inplanes, planes, kernel_size=3, stride=stride, padding=1, bias=False)
-        self.bn1 = nn.BatchNorm2d(planes)
+        self.bn1 = nn.InstanceNorm2d(planes)
         self.relu = nn.ReLU(inplace=True)
         self.conv2 = nn.Conv2d(planes, planes, kernel_size=3, stride=1, padding=1, bias=False)
-        self.bn2 = nn.BatchNorm2d(planes)
+        self.bn2 = nn.InstanceNorm2d(planes)
 
         # Style vector processing
         self.style_fc = nn.Linear(style_dim, planes)  # Linear layer for style vector
